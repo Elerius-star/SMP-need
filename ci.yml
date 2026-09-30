@@ -1,0 +1,89 @@
+name: SMP-Need CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: smp
+          POSTGRES_PASSWORD: smp_secret
+          POSTGRES_DB: smp_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U smp"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+
+    env:
+      DJANGO_SETTINGS_MODULE: smpneed.settings
+      DATABASE_URL: postgres://smp:smp_secret@localhost:5432/smp_test
+      REDIS_URL: redis://localhost:6379/0
+      SECRET_KEY: ci-secret-key
+      DEBUG: "True"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install coverage
+
+      - name: Migrate
+        working-directory: backend
+        run: python manage.py migrate
+
+      - name: Django check
+        working-directory: backend
+        run: python manage.py check
+
+      - name: Run tests with coverage
+        working-directory: backend
+        run: |
+          coverage run --source='.' manage.py test
+          coverage report --fail-under=60
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Jest
+        working-directory: frontend/tests
+        run: npm install
+
+      - name: Run tests
+        working-directory: frontend/tests
+        run: npx jest --config jest.config.js --ci
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install flake8
+      - run: flake8 backend --max-line-length=120 --exclude=migrations,venv
