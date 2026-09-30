@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SMP-Need — Home</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/dashboard.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">SMP<span>·</span><em>Need</em></div>
+    <div class="search"><input id="search-input" placeholder="Search users…" /></div>
+    <div class="top-actions">
+      <button class="icon-btn" id="btn-notif" title="Notifications"><span class="badge" id="notif-badge">0</span>🔔</button>
+      <button class="icon-btn" id="btn-chat" title="Chat">💬</button>
+      <button class="icon-btn" id="btn-video" title="Video call">🎥</button>
+      <button class="icon-btn" id="btn-record" title="Screen record">⏺</button>
+      <button class="icon-btn" id="btn-theme" title="Dark mode">🌙</button>
+      <div class="avatar sm" id="nav-avatar" onclick="location.href='profile.html'"></div>
+      <button class="btn btn-ghost" id="btn-logout">Logout</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <nav>
+        <a class="nav-item active" href="#">🏠 Home</a>
+        <a class="nav-item" href="#" onclick="window.loadHashtag?.('trending');return false">🔥 Trending</a>
+        <a class="nav-item" href="#" onclick="window.loadBookmarks?.();return false">🔖 Saved</a>
+        <a class="nav-item" href="#" onclick="window.loadDrafts?.();return false">✍️ Drafts</a>
+        <a class="nav-item" href="#" onclick="window.openSettings?.();return false">⚙️ Settings</a>
+      </nav>
+      <div class="trending-box">
+        <h4>Trending</h4>
+        <ul id="trending-list"></ul>
+      </div>
+    </aside>
+
+    <main class="feed">
+      <div class="composer card">
+        <textarea id="composer-input" placeholder="What's on your mind?"></textarea>
+        <div class="composer-actions">
+          <label class="btn btn-ghost">📷<input type="file" id="composer-image" accept="image/*" hidden /></label>
+          <select id="composer-visibility" class="vis-select">
+            <option value="public">🌍 Public</option>
+            <option value="followers">👥 Followers</option>
+            <option value="private">🔒 Private</option>
+          </select>
+          <button class="btn btn-ghost" id="btn-poll">📊 Poll</button>
+          <button class="btn btn-ghost" id="btn-draft">Save Draft</button>
+          <button class="btn btn-primary" id="btn-post">Post</button>
+        </div>
+        <div id="composer-preview"></div>
+        <div id="poll-builder" class="hidden" style="margin-top:12px;padding:12px;border:1px solid var(--border);border-radius:10px">
+          <input id="poll-question" placeholder="Poll question" style="margin-bottom:8px" />
+          <input class="poll-opt" placeholder="Option 1" style="margin-bottom:6px" />
+          <input class="poll-opt" placeholder="Option 2" style="margin-bottom:6px" />
+          <button class="btn btn-ghost" id="add-poll-opt">+ Add option</button>
+        </div>
+      </div>
+
+      <div id="feed-list"></div>
+      <div id="feed-loader" class="loader hidden">Loading…</div>
+    </main>
+
+    <aside class="rightbar">
+      <div class="card profile-mini" id="profile-mini"></div>
+      <div class="card">
+        <h4 style="margin-bottom:10px">Who to follow</h4>
+        <div id="suggested-users"></div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="drawer hidden" id="notif-drawer">
+    <div class="drawer-head"><h3>Notifications</h3><button id="close-notif">✕</button></div>
+    <div id="notif-list"></div>
+  </div>
+
+  <div class="chat-panel hidden" id="chat-panel">
+    <div class="drawer-head"><h3>Chat</h3><button id="close-chat">✕</button></div>
+    <div id="chat-messages"></div>
+    <div class="chat-input">
+      <input id="chat-input" placeholder="Type a message…" />
+      <button class="btn btn-primary" id="send-chat">Send</button>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="video-modal">
+    <div class="modal-body">
+      <h3>Video Call</h3>
+      <div class="video-grid">
+        <video id="local-video" autoplay muted playsinline></video>
+        <video id="remote-video" autoplay playsinline></video>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="start-call">Start</button>
+        <button class="btn btn-danger" id="end-call">End</button>
+        <button class="btn btn-ghost" id="close-video">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="record-modal">
+    <div class="modal-body">
+      <h3>Recording</h3>
+      <video id="record-preview" controls class="hidden"></video>
+      <div class="modal-actions">
+        <button class="btn btn-green" id="start-rec">Start</button>
+        <button class="btn btn-danger" id="stop-rec">Stop</button>
+        <a class="btn btn-primary hidden" id="download-rec" download="recording.webm">Download</a>
+        <button class="btn btn-ghost" id="close-rec">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="js/api.js"></script>
+  <script src="js/lightbox.js"></script>
+  <script src="js/emoji.js"></script>
+  <script src="js/feed.js"></script>
+  <script src="js/dashboard.js"></script>
+  <script src="js/webrtc.js"></script>
+  <script src="js/recorder.js"></script>
+  <script src="js/chat.js"></script>
+  <script src="js/notifications.js"></script>
+  <script>
+    // Poll builder toggle + submit
+    document.getElementById('btn-poll')?.addEventListener('click', () => {
+      document.getElementById('poll-builder').classList.toggle('hidden');
+    });
+    document.getElementById('add-poll-opt')?.addEventListener('click', () => {
+      const inp = document.createElement('input');
+      inp.className = 'poll-opt';
+      inp.placeholder = `Option ${document.querySelectorAll('.poll-opt').length + 1}`;
+      inp.style.marginBottom = '6px';
+      document.getElementById('add-poll-opt').before(inp);
+    });
+  </script>
+</body>
+</html>
