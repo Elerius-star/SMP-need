@@ -1,191 +1,152 @@
 from rest_framework import serializers
-from django.contrib.auth.password_validation import validate_password
+from accounts.serializers import UserMiniSerializer
 from .models import (
-    User, Block, Mute, MutedWord, EmailVerificationToken,
-    PasswordResetToken, LoginHistory, DeviceSession,
-    ProfileVerificationRequest, UserSettings,
+    Post, Comment, CommentLike, Bookmark, Hashtag,
+    Poll, PollOption, PollVote, SavedSearch, PostAnalytics,
 )
 
 
-class UserMiniSerializer(serializers.ModelSerializer):
-    is_online = serializers.BooleanField(read_only=True)
+class PollOptionSerializer(serializers.ModelSerializer):
+    percent = serializers.SerializerMethodField()
     class Meta:
-        model = User
-        fields = ['id', 'username', 'avatar', 'is_verified', 'is_online']
+        model = PollOption
+        fields = ['id', 'text', 'votes_count', 'percent']
+
+    def get_percent(self, obj):
+        total = obj.poll.options.aggregate(s=serializers.models.Sum('votes_count'))['s'] or 0
+        if not total:
+            return 0
+        return round(obj.votes_count / total * 100, 1)
 
 
-class UserSettingsSerializer(serializers.ModelSerializer):
+class PollSerializer(serializers.ModelSerializer):
+    options = PollOptionSerializer(many=True)
+    total_votes = serializers.SerializerMethodField()
     class Meta:
-        model = UserSettings
-        exclude = ['user', 'updated_at']
+        model = Poll
+        fields = ['id', 'question', 'ends_at', 'options', 'total_votes', 'is_open']
+
+    def get_total_votes(self, obj):
+        return sum(o.votes_count for o in obj.options.all())
 
 
-class UserSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, required=False, validators=[validate_password])
-    is_following = serializers.SerializerMethodField()
-    is_blocked = serializers.SerializerMethodField()
-    is_muted = serializers.SerializerMethodField()
-    settings = UserSettingsSerializer(read_only=True)
+class CommentLikeSerializer(serializers.ModelSerializer):
+    user = UserMiniSerializer(read_only=True)
+    class Meta:
+        model = CommentLike
+        fields = ['id', 'user', 'created_at']
+
+
+class CommentSerializer(serializers.ModelSerializer):
+    author = UserMiniSerializer(read_only=True)
+    replies = serializers.SerializerMethodField()
+    is_liked = serializers.SerializerMethodField()
+    likes = CommentLikeSerializer(source='likes', many=True, read_only=True)
 
     class Meta:
-        model = User
-        fields = [
-            'id', 'username', 'email', 'password', 'bio', 'avatar', 'banner',
-            'location', 'website', 'birth_date', 'is_verified', 'is_private',
-            'is_deactivated', 'email_verified', 'followers_count', 'following_count',
-            'posts_count', 'last_seen', 'date_joined', 'is_following',
-            'is_blocked', 'is_muted', 'theme_preference', 'settings',
-        ]
-        read_only_fields = ['id', 'followers_count', 'following_count',
-                            'posts_count', 'date_joined', 'is_verified',
-                            'email_verified', 'last_seen']
+        model = Comment
+        fields = ['id', 'post', 'author', 'parent', 'content',
+                  'likes_count', 'created_at', 'updated_at',
+                  'is_edited', 'replies', 'is_liked', 'likes']
+        read_only_fields = ['id', 'author', 'likes_count', 'created_at', 'updated_at']
 
-    def get_is_following(self, obj):
+    def get_replies(self, obj):
+        if obj.replies.exists():
+            return CommentSerializer(obj.replies.all(), many=True,
+                                     context=self.context).data
+        return []
+
+    def get_is_liked(self, obj):
         request = self.context.get('request')
         if not request or not request.user.is_authenticated:
             return False
-        return obj.followers_set.filter(follower=request.user).exists()
+        return obj.likes.filter(user=request.user).exists()
 
-    def get_is_blocked(self, obj):
-        request = self.context.get('request')
-        if not request or not request.user.is_authenticated:
-            return False
-        return Block.objects.filter(blocker=request.user, blocked=obj).exists()
-
-    def get_is_muted(self, obj):
-        request = self.context.get('request')
-        if not request or not request.user.is_authenticated:
-            return False
-        return Mute.objects.filter(muter=request.user, muted=obj).exists()
-
-    def create(self, validated_data):
-        password = validated_data.pop('password', None)
-        user = User(**validated_data)
-        if password:
-            user.set_password(password)
-        user.save()
-        UserSettings.objects.create(user=user)
-        return user
-
-    def update(self, instance, validated_data):
-        password = validated_data.pop('password', None)
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        if password:
-            instance.set_password(password)
-        instance.save()
-        return instance
-
-
-class RegisterSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, validators=[validate_password])
-    password2 = serializers.CharField(write_only=True)
-
-    class Meta:
-        model = User
-        fields = ['username', 'email', 'password', 'password2']
-
-    def validate_username(self, value):
-        if User.objects.filter(username__iexact=value).exists():
-            raise serializers.ValidationError('Username taken.')
-        if not value.replace('_', '').isalnum():
-            raise serializers.ValidationError('Only letters, digits, underscores.')
-        if len(value) < 3:
-            raise serializers.ValidationError('Too short.')
-        return value
-
-    def validate(self, attrs):
-        if attrs['password'] != attrs['password2']:
-            raise serializers.ValidationError({'password': 'Passwords do not match.'})
-        if User.objects.filter(email__iexact=attrs['email']).exists():
-            raise serializers.ValidationError({'email': 'Email already registered.'})
-        return attrs
-
-    def create(self, validated_data):
-        validated_data.pop('password2')
-        password = validated_data.pop('password')
-        user = User(**validated_data)
-        user.set_password(password)
-        user.save()
-        UserSettings.objects.create(user=user)
-        return user
-
-
-class BlockSerializer(serializers.ModelSerializer):
-    blocked_user = UserMiniSerializer(source='blocked', read_only=True)
-    class Meta:
-        model = Block
-        fields = ['id', 'blocked_user', 'created_at']
-
-
-class MuteSerializer(serializers.ModelSerializer):
-    muted_user = UserMiniSerializer(source='muted', read_only=True)
-    class Meta:
-        model = Mute
-        fields = ['id', 'muted_user', 'created_at', 'until', 'is_active']
-
-
-class MutedWordSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = MutedWord
-        fields = ['id', 'word', 'created_at']
-
-
-class PasswordResetRequestSerializer(serializers.Serializer):
-    email = serializers.EmailField()
-
-    def validate_email(self, value):
-        if not User.objects.filter(email__iexact=value).exists():
-            # Don't leak existence — return OK
-            return value
+    def validate_content(self, value):
+        if len(value) > 1000:
+            raise serializers.ValidationError("Max 1000 characters.")
+        if len(value.strip()) == 0:
+            raise serializers.ValidationError("Cannot be empty.")
         return value
 
 
-class PasswordResetConfirmSerializer(serializers.Serializer):
-    token = serializers.CharField()
-    password = serializers.CharField(validators=[validate_password])
-    password2 = serializers.CharField()
-
-    def validate(self, attrs):
-        if attrs['password'] != attrs['password2']:
-            raise serializers.ValidationError({'password': 'Mismatch.'})
-        try:
-            t = PasswordResetToken.objects.get(token=attrs['token'])
-        except PasswordResetToken.DoesNotExist:
-            raise serializers.ValidationError({'token': 'Invalid.'})
-        if not t.is_valid():
-            raise serializers.ValidationError({'token': 'Expired or used.'})
-        attrs['token_obj'] = t
-        return attrs
-
-
-class ChangePasswordSerializer(serializers.Serializer):
-    old_password = serializers.CharField()
-    new_password = serializers.CharField(validators=[validate_password])
-    new_password2 = serializers.CharField()
-
-    def validate(self, attrs):
-        if attrs['new_password'] != attrs['new_password2']:
-            raise serializers.ValidationError({'new_password': 'Mismatch.'})
-        return attrs
-
-
-class LoginHistorySerializer(serializers.ModelSerializer):
+class PostAnalyticsSerializer(serializers.ModelSerializer):
     class Meta:
-        model = LoginHistory
+        model = PostAnalytics
         fields = '__all__'
 
 
-class DeviceSessionSerializer(serializers.ModelSerializer):
+class PostSerializer(serializers.ModelSerializer):
+    author = UserMiniSerializer(read_only=True)
+    is_liked = serializers.SerializerMethodField()
+    is_bookmarked = serializers.SerializerMethodField()
+    original = serializers.SerializerMethodField()
+    poll = PollSerializer(read_only=True)
+    analytics = PostAnalyticsSerializer(read_only=True)
+    like_preview = serializers.SerializerMethodField()
+
     class Meta:
-        model = DeviceSession
-        fields = ['id', 'device_name', 'ip_address', 'last_active',
-                  'created_at', 'is_revoked']
+        model = Post
+        fields = ['id', 'author', 'content', 'image', 'image_thumb',
+                  'image_medium', 'video', 'link_url', 'link_title',
+                  'link_description', 'link_image', 'visibility',
+                  'is_draft', 'scheduled_for', 'published_at', 'is_repost',
+                  'is_quote', 'original_post', 'original', 'hashtags',
+                  'mentions', 'likes_count', 'comments_count', 'reposts_count',
+                  'views_count', 'is_pinned', 'is_edited', 'edited_at',
+                  'language', 'created_at', 'updated_at', 'is_liked',
+                  'is_bookmarked', 'poll', 'analytics', 'like_preview']
+        read_only_fields = ['id', 'author', 'likes_count', 'comments_count',
+                            'reposts_count', 'views_count', 'created_at',
+                            'updated_at', 'hashtags', 'mentions', 'published_at']
+
+    def validate_content(self, value):
+        if len(value) > 2000:
+            raise serializers.ValidationError("Max 2000 characters.")
+        return value
+
+    def get_is_liked(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+        return obj.likes.filter(user=request.user).exists()
+
+    def get_is_bookmarked(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+        return obj.bookmarked_by.filter(user=request.user).exists()
+
+    def get_original(self, obj):
+        if obj.original_post:
+            return {
+                'id': obj.original_post.id,
+                'author': UserMiniSerializer(obj.original_post.author).data,
+                'content': obj.original_post.content,
+                'image': obj.original_post.image.url if obj.original_post.image else None,
+                'created_at': obj.original_post.created_at,
+            }
+        return None
+
+    def get_like_preview(self, obj):
+        likes = obj.likes.select_related('user')[:5]
+        return [UserMiniSerializer(l.user).data for l in likes]
 
 
-class ProfileVerificationSerializer(serializers.ModelSerializer):
+class BookmarkSerializer(serializers.ModelSerializer):
+    post = PostSerializer(read_only=True)
     class Meta:
-        model = ProfileVerificationRequest
-        fields = ['id', 'reason', 'document', 'status',
-                  'reviewer_note', 'created_at', 'reviewed_at']
-        read_only_fields = ['status', 'reviewer_note', 'reviewed_at']
+        model = Bookmark
+        fields = ['id', 'post', 'created_at']
+
+
+class HashtagSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Hashtag
+        fields = ['id', 'name', 'post_count', 'trend_score', 'last_used']
+
+
+class SavedSearchSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SavedSearch
+        fields = ['id', 'query', 'created_at']
