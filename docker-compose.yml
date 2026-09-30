@@ -1,0 +1,82 @@
+version: '3.9'
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: smp
+      POSTGRES_PASSWORD: smp_secret
+      POSTGRES_DB: smp_need
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smp"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py collectstatic --noinput &&
+             daphne -b 0.0.0.0 -p 8000 smpneed.asgi:application"
+    environment:
+      - DJANGO_SETTINGS_MODULE=smpneed.settings
+      - DEBUG=False
+      - SECRET_KEY=change-me
+      - DATABASE_URL=postgres://smp:smp_secret@db:5432/smp_need
+      - REDIS_URL=redis://redis:6379/0
+      - ALLOWED_HOSTS=localhost,127.0.0.1,backend
+      - CORS_ORIGINS=http://localhost:5500,http://127.0.0.1:5500,http://localhost
+    volumes:
+      - ./backend:/app
+      - media:/app/media
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    image: nginx:alpine
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+    ports:
+      - "5500:80"
+    depends_on:
+      - backend
+
+  worker:
+    build: ./backend
+    command: celery -A smpneed worker -l info -B
+    environment:
+      - DJANGO_SETTINGS_MODULE=smpneed.settings
+      - DEBUG=False
+      - SECRET_KEY=change-me
+      - DATABASE_URL=postgres://smp:smp_secret@db:5432/smp_need
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./backend:/app
+      - media:/app/media
+    depends_on:
+      - db
+      - redis
+
+volumes:
+  pgdata:
+  media:
